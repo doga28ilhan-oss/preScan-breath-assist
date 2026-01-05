@@ -1,56 +1,70 @@
 WP2: Development of the Breath-Hold Detection Pipeline
 
-WP2.1 System Architecture
+Work Package 2 (WP2) covers the end-to-end development of the temporal deep learning pipeline for breath-hold detection. This includes the implementation of the data loading and preprocessing, the model architecture, the training and evaluation strategy, and the final inference and post-processing pipeline.
 
-The core of the project is a temporal deep learning pipeline designed for offline analysis of front-view video recordings. The system is engineered to identify and segment meaningful breath-hold events, moving beyond simple frame-level classification to provide temporally coherent outputs.
+WP2.1 Project Structure for Development
 
-The high-level architecture is as follows:
+The development work is organized within a structured project directory to ensure modularity and reproducibility. The key directories relevant to WP2 are:
 
-1.  **Video Input:** The pipeline takes a standard video file (e.g., .mp4) as input.
-2.  **Sliding Window Extraction:** The video is preprocessed by extracting temporal windows of a fixed length (15 consecutive frames). This is achieved using a sliding window approach with a defined stride, converting the video into a sequence of overlapping temporal segments. This representation is critical for capturing motion patterns over time.
-3.  **Temporal CNN:** Each window is passed as input to a temporal Convolutional Neural Network (CNN). The chosen model is `MobileNetV3Temporal`, which is optimized for processing sequential data.
-4.  **Window-Level Probabilities:** The model outputs a probability score for each window, indicating the likelihood of a breath-hold event occurring within that temporal segment.
-5.  **Thresholding:** A carefully selected probability threshold is applied to the window-level predictions to classify each window as either "breathing" or "breath-hold." The final deployment threshold was chosen based on segment-level behavior rather than window-level metrics to ensure meaningful detections.
-6.  **Temporal Post-processing:** The binary predictions are subjected to temporal filtering. A minimum duration constraint (`min_hold_sec = 2.0 seconds`) is applied to remove short, noisy spikes and retain only temporally consistent segments.
-7.  **Output:** The final output of the pipeline is a set of breath-hold segments, each defined by a start time, end time, and duration.
+-   `src/`: This directory contains the core source code for the project, including the dataset loader and the model architecture.
+    -   `src/datasets/window_dataset.py`: Defines the `WindowVideoDataset` class, which is responsible for loading, preprocessing, and augmenting the temporal window data from the manifest files created in WP1.
+    -   `src/models/mobilenet_temporal.py`: Contains the implementation of the `MobileNetV3Temporal` model, the temporal Convolutional Neural Network (CNN) used for breath-hold detection.
 
-This segment-centric approach ensures that the system's outputs are stable, interpretable, and directly address the core problem of detecting meaningful breath-hold events.
+-   `tools/core/`: This directory houses the high-level scripts that orchestrate the training, evaluation, and inference processes.
+    -   `tools/core/train_final_v4.py`: The primary script for training the final version of the model. It handles dataset splitting, model initialization, the training loop, validation, and the saving of model artifacts.
+    -   `tools/core/predict_video.py`: The script used for running inference on new video data. It loads a trained model checkpoint, processes a video manifest, and outputs window-level predictions and final breath-hold segments.
+    -   `tools/core/train_loso.py`: A script used during the development and validation phase to perform Leave-One-Subject-Out (LOSO) cross-validation, ensuring the model's generalizability.
 
-WP2.2 Model Architecture
+-   `data/windows/`: This directory contains the CSV manifest files generated in WP1. These manifests are the direct input to the development pipeline.
+    -   `manifest_final_train_v3.csv`: The definitive manifest file used for training and validating the final model. It includes paths to the video files, window definitions, labels, and dataset split information.
 
-The model used in this pipeline is a custom temporal CNN named `MobileNetV3Temporal`.
+-   `runs/`: This directory serves as the output location for all experiments, storing model checkpoints, training metadata, and inference results.
+    -   `runs/final_model_v4_rgb_bce/`: The output directory for the final trained model. It contains:
+        -   `final_best.pt`: The PyTorch model checkpoint with the best validation performance.
+        -   `final_meta.json`: A JSON file containing all metadata related to the training run, including hyperparameters, dataset information, and performance metrics, ensuring full reproducibility.
 
--   **Base Model:** The architecture is based on MobileNetV3, a lightweight and efficient CNN, adapted for temporal analysis.
--   **Temporal Window:** The model processes temporal windows of 15 frames.
--   **Input Mode:** The final model was trained using the `rgb` input mode. An alternative `diff` mode (frame differencing) was evaluated but ultimately rejected due to instability, particularly for `exhale_hold` cases where motion is minimal.
--   **Pooling and Aggregation:** The model aggregates frame-level features into a window-level representation using max pooling.
+WP2.2 Data Loading and Preprocessing
 
-The definitive configuration and hyperparameters for the final trained model are stored in the `runs/final_model_v4_rgb_bce/final_meta.json` file to ensure reproducibility.
+The data pipeline is implemented in the `WindowVideoDataset` class in `src/datasets/window_dataset.py`. Its primary responsibility is to consume the manifest files from `data/windows/` and prepare the data for the model.
 
-WP2.3 Training and Evaluation Strategy
+1.  **Manifest Consumption:** The dataset loader reads the `manifest_final_train_v3.csv` file and filters it based on the specified split (`train` or `val`) and fold ID.
+2.  **Video Clip Extraction:** For each row in the manifest, the loader reads the corresponding video clip from the path specified in the `front_video_path` column. It uses OpenCV to extract the 15 consecutive frames starting from the `start_frame` index.
+3.  **Input Modality:** The model was trained in `rgb` mode, meaning the raw RGB frames are used directly. The dataset class also supports a `diff` mode (frame differencing), which was evaluated but rejected due to performance issues.
+4.  **Transformations and Augmentation:** The extracted frames are transformed into PyTorch tensors. For the training set, minimal data augmentation (ColorJitter) is applied. All frames are resized to 224x224 and normalized using ImageNet statistics, as is standard for models with a pretrained backbone.
+5.  **Label Handling:** The binary ground truth label (0 for "breathing," 1 for "breath-hold") from the `label` column of the manifest is converted to a float32 tensor.
 
-The training and evaluation strategy was designed to ensure the model's generalization capabilities across different subjects and to prevent data leakage.
+This process results in batches of data, where each sample is a tuple containing a tensor of shape `[Batch, 15, 3, 224, 224]` (representing a batch of 15-frame video clips) and a corresponding label tensor.
 
--   **Leave-One-Subject-Out (LOSO) Cross-Validation:** During development, a rigorous LOSO evaluation strategy was employed. In each fold of the cross-validation, the model was trained on data from all but one subject and tested on the held-out subject. This was critical for:
-    -   Detecting any potential subject-specific biases.
-    -   Ensuring the model learns generalizable patterns of respiratory motion.
-    -   Avoiding inflated performance metrics that can result from subject leakage.
+WP2.3 Model Architecture
 
--   **Final Model Training:** For the final model, all available data was used for training, with a leak-free validation split to monitor performance and prevent overfitting. The best-performing model checkpoint was selected based on its validation behavior.
+The `MobileNetV3Temporal` model, defined in `src/models/mobilenet_temporal.py`, is a temporal CNN designed to classify video clips.
 
--   **Reproducibility:** All training metadata, including hyperparameters, dataset splits, and evaluation metrics, are automatically saved to a `final_meta.json` file, ensuring that the training process is fully transparent and reproducible.
+1.  **Backbone:** The model uses a pretrained MobileNetV3-Small as its feature extractor. The weights are initialized from the ImageNet-trained version to leverage transfer learning.
+2.  **Frame-Level Feature Extraction:** Each of the 15 frames in a window is passed independently through the MobileNetV3 backbone to extract spatial features.
+3.  **Temporal Pooling:** The frame-level features are then aggregated along the temporal dimension. The final model uses max pooling, which was found to be more effective than mean pooling. This step condenses the temporal information into a single feature vector representing the entire window.
+4.  **Classifier:** The pooled feature vector is passed through a linear classifier with a dropout layer to produce a single logit, which represents the model's prediction for the window.
 
-WP2.4 Inference and Post-Processing Pipeline
+WP2.4 Training and Evaluation
 
-The inference pipeline is designed to be consistent with the training process, ensuring that the same preprocessing and model architecture are used.
+The final model was trained using the `tools/core/train_final_v4.py` script.
 
--   **Manifest-Based Inference:** Inference is performed using a manifest file that defines the windows to be processed. The `predict_video.py` script orchestrates the inference process.
--   **Compatibility Enforcement:** The inference script validates its configuration against the `final_meta.json` file from the training run to ensure that critical parameters (e.g., input mode, pooling strategy) are identical.
--   **Thresholding:** A deployment threshold of `0.90` is applied to the window-level probabilities. This value was selected to optimize for segment-level precision and recall, prioritizing the detection of meaningful events over noisy, short-duration spikes.
--   **Temporal Filtering:** A minimum duration constraint of 2.0 seconds is applied to the detected segments. Any predicted breath-hold event shorter than this duration is filtered out, improving the robustness and reliability of the final output.
--   **Outputs:** The inference pipeline generates several outputs, including:
-    -   A CSV file with window-level predictions.
-    -   A summary of the detected breath-hold segments (start, end, duration).
-    -   Plots visualizing the predictions over time.
+1.  **Loss Function:** The model is trained using a binary cross-entropy loss function (`BCEWithLogitsLoss`). To handle the class imbalance between breathing and breath-hold windows, a `pos_weight` is computed and applied to the loss function, giving more weight to the minority (breath-hold) class.
+2.  **Optimizer:** The AdamW optimizer is used with a learning rate of `1e-4`.
+3.  **Training Loop:** The model is trained for 15 epochs. In each epoch, the script iterates through the training data, computes the loss, and updates the model's weights.
+4.  **Validation and Model Selection:** After each epoch, the model's performance is evaluated on the validation set. The script calculates the F1 score at various probability thresholds and selects the threshold that yields the best F1 score for that epoch. The model checkpoint (`final_best.pt`) that achieves the highest F1 score on the validation set throughout the training process is saved.
+5.  **Reproducibility:** All hyperparameters and results, including the best-performing threshold on the validation set, are saved to `runs/final_model_v4_rgb_bce/final_meta.json`. This file is crucial for ensuring that the inference process is perfectly aligned with the training conditions.
 
-This disciplined, engineering-focused approach to development ensures that the final pipeline is robust, reproducible, and academically defensible.
+WP2.5 Inference and Post-Processing
+
+The `tools/core/predict_video.py` script is used to perform inference on new videos.
+
+1.  **Model Loading:** The script loads the trained model weights from the `final_best.pt` checkpoint located in `runs/final_model_v4_rgb_bce/`.
+2.  **Prediction:** It processes an inference manifest (created with `make_windows_for_video.py`) and generates a window-level probability for each window in the video.
+3.  **Thresholding:** A final probability threshold of `0.90` is applied to the predictions. This threshold was selected based on a holistic evaluation of segment-level performance and is higher than the validation-optimal threshold to prioritize precision in the final output.
+4.  **Temporal Post-Processing:** The binary predictions are filtered to remove short, noisy detections. A `min_hold_sec` constraint of 2.0 seconds is applied, meaning any predicted breath-hold segment shorter than this duration is discarded.
+5.  **Output Generation:** The script produces three key output files in a specified output directory (e.g., `runs/final_demo/`):
+    -   `predictions.csv`: A detailed CSV with window-by-window predictions and probabilities.
+    -   `segments.csv`: A summary of the final, post-processed breath-hold segments with their start and end frames.
+    -   `probability_plot.png`: A visual plot of the predicted probabilities over time.
+
+This structured and disciplined development process, from data loading to post-processed inference, ensures that the final breath-hold detection pipeline is robust, reproducible, and well-documented.
