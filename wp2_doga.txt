@@ -1,0 +1,56 @@
+WP2: Development of the Breath-Hold Detection Pipeline
+
+WP2.1 System Architecture
+
+The core of the project is a temporal deep learning pipeline designed for offline analysis of front-view video recordings. The system is engineered to identify and segment meaningful breath-hold events, moving beyond simple frame-level classification to provide temporally coherent outputs.
+
+The high-level architecture is as follows:
+
+1.  **Video Input:** The pipeline takes a standard video file (e.g., .mp4) as input.
+2.  **Sliding Window Extraction:** The video is preprocessed by extracting temporal windows of a fixed length (15 consecutive frames). This is achieved using a sliding window approach with a defined stride, converting the video into a sequence of overlapping temporal segments. This representation is critical for capturing motion patterns over time.
+3.  **Temporal CNN:** Each window is passed as input to a temporal Convolutional Neural Network (CNN). The chosen model is `MobileNetV3Temporal`, which is optimized for processing sequential data.
+4.  **Window-Level Probabilities:** The model outputs a probability score for each window, indicating the likelihood of a breath-hold event occurring within that temporal segment.
+5.  **Thresholding:** A carefully selected probability threshold is applied to the window-level predictions to classify each window as either "breathing" or "breath-hold." The final deployment threshold was chosen based on segment-level behavior rather than window-level metrics to ensure meaningful detections.
+6.  **Temporal Post-processing:** The binary predictions are subjected to temporal filtering. A minimum duration constraint (`min_hold_sec = 2.0 seconds`) is applied to remove short, noisy spikes and retain only temporally consistent segments.
+7.  **Output:** The final output of the pipeline is a set of breath-hold segments, each defined by a start time, end time, and duration.
+
+This segment-centric approach ensures that the system's outputs are stable, interpretable, and directly address the core problem of detecting meaningful breath-hold events.
+
+WP2.2 Model Architecture
+
+The model used in this pipeline is a custom temporal CNN named `MobileNetV3Temporal`.
+
+-   **Base Model:** The architecture is based on MobileNetV3, a lightweight and efficient CNN, adapted for temporal analysis.
+-   **Temporal Window:** The model processes temporal windows of 15 frames.
+-   **Input Mode:** The final model was trained using the `rgb` input mode. An alternative `diff` mode (frame differencing) was evaluated but ultimately rejected due to instability, particularly for `exhale_hold` cases where motion is minimal.
+-   **Pooling and Aggregation:** The model aggregates frame-level features into a window-level representation using max pooling.
+
+The definitive configuration and hyperparameters for the final trained model are stored in the `runs/final_model_v4_rgb_bce/final_meta.json` file to ensure reproducibility.
+
+WP2.3 Training and Evaluation Strategy
+
+The training and evaluation strategy was designed to ensure the model's generalization capabilities across different subjects and to prevent data leakage.
+
+-   **Leave-One-Subject-Out (LOSO) Cross-Validation:** During development, a rigorous LOSO evaluation strategy was employed. In each fold of the cross-validation, the model was trained on data from all but one subject and tested on the held-out subject. This was critical for:
+    -   Detecting any potential subject-specific biases.
+    -   Ensuring the model learns generalizable patterns of respiratory motion.
+    -   Avoiding inflated performance metrics that can result from subject leakage.
+
+-   **Final Model Training:** For the final model, all available data was used for training, with a leak-free validation split to monitor performance and prevent overfitting. The best-performing model checkpoint was selected based on its validation behavior.
+
+-   **Reproducibility:** All training metadata, including hyperparameters, dataset splits, and evaluation metrics, are automatically saved to a `final_meta.json` file, ensuring that the training process is fully transparent and reproducible.
+
+WP2.4 Inference and Post-Processing Pipeline
+
+The inference pipeline is designed to be consistent with the training process, ensuring that the same preprocessing and model architecture are used.
+
+-   **Manifest-Based Inference:** Inference is performed using a manifest file that defines the windows to be processed. The `predict_video.py` script orchestrates the inference process.
+-   **Compatibility Enforcement:** The inference script validates its configuration against the `final_meta.json` file from the training run to ensure that critical parameters (e.g., input mode, pooling strategy) are identical.
+-   **Thresholding:** A deployment threshold of `0.90` is applied to the window-level probabilities. This value was selected to optimize for segment-level precision and recall, prioritizing the detection of meaningful events over noisy, short-duration spikes.
+-   **Temporal Filtering:** A minimum duration constraint of 2.0 seconds is applied to the detected segments. Any predicted breath-hold event shorter than this duration is filtered out, improving the robustness and reliability of the final output.
+-   **Outputs:** The inference pipeline generates several outputs, including:
+    -   A CSV file with window-level predictions.
+    -   A summary of the detected breath-hold segments (start, end, duration).
+    -   Plots visualizing the predictions over time.
+
+This disciplined, engineering-focused approach to development ensures that the final pipeline is robust, reproducible, and academically defensible.
